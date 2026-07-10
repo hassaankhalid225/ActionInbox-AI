@@ -1,0 +1,893 @@
+// ActionInbox AI — Prisma schema
+// ---------------------------------------------------------------------------
+// Dev target: SQLite (zero-config). Production target: PostgreSQL + pgvector.
+// Portability notes:
+//   * Enums are modelled as String columns validated by Zod at the app layer
+//     (SQLite has no native enum). See src/lib/constants for the value sets.
+//   * JSON payloads are stored as String columns ("...Json") and parsed at the
+//     service layer. On Postgres these can become `Json`/`jsonb`.
+//   * Money is stored as integer MINOR units (e.g. cents) to avoid float error.
+//   * To move to Postgres: change datasource provider + DATABASE_URL, optionally
+//     promote enums/Json, then `prisma migrate`.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Identity ─────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String?
+  name          String
+  avatarColor   String   @default("#4f46e5")
+  status        String   @default("active") // active | invited | suspended
+  emailVerified Boolean  @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships       Membership[]
+  sessions          Session[]
+  sentInvitations   Invitation[]      @relation("InvitedBy")
+  assignedItems     InboundItem[]     @relation("AssignedTo")
+  assignedTasks     Task[]            @relation("TaskAssignee")
+  createdTasks      Task[]            @relation("TaskCreatedBy")
+  auditLogs         AuditLog[]
+  actionEvents      ActionEvent[]
+  notifications     Notification[]
+  approvals         Approval[]        @relation("ApprovalDecidedBy")
+  notes             Note[]
+}
+
+model Organization {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  industry      String?
+  country       String   @default("PK")
+  currency      String   @default("PKR")
+  timezone      String   @default("Asia/Karachi")
+  primaryLang   String   @default("en")
+  secondaryLang String?
+  teamSize      String?
+  logoUrl       String?
+  addressJson   String? // billing/legal address blob
+  taxId         String?
+  brandColor    String   @default("#4f46e5")
+  onboardingStep Int     @default(0)
+  onboardedAt   DateTime?
+  primaryGoal   String? // faster_quotes | payment_followups | doc_reminders | customer_inbox | general
+  settingsJson  String? // AI thresholds, tone, approval policy, notifications
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships     Membership[]
+  invitations     Invitation[]
+  channelAccounts ChannelAccount[]
+  webhookEvents   WebhookEvent[]
+  contacts        Contact[]
+  conversations   Conversation[]
+  inboundItems    InboundItem[]
+  attachments     Attachment[]
+  aiJobs          AiJob[]
+  aiAnalyses      AiAnalysis[]
+  usageCosts      UsageCost[]
+  actionSuggestions ActionSuggestion[]
+  tasks           Task[]
+  reminders       Reminder[]
+  approvals       Approval[]
+  actionEvents    ActionEvent[]
+  catalogItems    CatalogItem[]
+  quotes          Quote[]
+  invoices        Invoice[]
+  paymentEvents   PaymentEvent[]
+  documents       Document[]
+  obligations     Obligation[]
+  workflowRules   WorkflowRule[]
+  workflowExecutions WorkflowExecution[]
+  templates       Template[]
+  labels          Label[]
+  auditLogs       AuditLog[]
+  subscription    Subscription?
+  usageCounters   UsageCounter[]
+  metricsRollups  MetricsRollup[]
+  notifications   Notification[]
+  outboundMessages OutboundMessage[]
+  notes           Note[]
+}
+
+model Membership {
+  id       String   @id @default(cuid())
+  userId   String
+  orgId    String
+  role     String   @default("agent") // owner | admin | manager | agent | finance | viewer
+  status   String   @default("active") // active | invited | suspended
+  isDefault Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+}
+
+model Invitation {
+  id         String   @id @default(cuid())
+  orgId      String
+  email      String
+  role       String   @default("agent")
+  token      String   @unique
+  status     String   @default("pending") // pending | accepted | revoked | expired
+  invitedById String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invitedBy  User?        @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  @@index([orgId])
+  @@index([email])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────── Channels ─────────────────────────────────
+
+model ChannelAccount {
+  id            String   @id @default(cuid())
+  orgId         String
+  type          String   // whatsapp | email | upload | instagram | sms
+  label         String
+  status        String   @default("pending") // pending | connected | error | disabled
+  identifier    String?  // phone number / forwarding address
+  configJson    String?  // provider config (encrypted in prod)
+  lastEventAt   DateTime?
+  healthNote    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  inboundItems  InboundItem[]
+  webhookEvents WebhookEvent[]
+
+  @@index([orgId])
+}
+
+model WebhookEvent {
+  id            String   @id @default(cuid())
+  orgId         String
+  channelId     String?
+  provider      String   // whatsapp | email | billing
+  providerEventId String
+  signatureOk   Boolean  @default(false)
+  status        String   @default("received") // received | processed | failed | duplicate
+  attempts      Int      @default(0)
+  payloadJson   String
+  error         String?
+  createdAt     DateTime @default(now())
+  processedAt   DateTime?
+
+  org     Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  channel ChannelAccount? @relation(fields: [channelId], references: [id])
+
+  @@unique([provider, providerEventId])
+  @@index([orgId])
+  @@index([status])
+}
+
+model OutboundMessage {
+  id          String   @id @default(cuid())
+  orgId       String
+  channelType String   // whatsapp | email
+  toIdentifier String
+  body        String
+  templateName String?
+  status      String   @default("queued") // queued | sent | delivered | read | failed
+  providerMessageId String?
+  idempotencyKey String? @unique
+  relatedType String?  // quote | invoice | reminder | reply
+  relatedId   String?
+  error       String?
+  createdAt   DateTime @default(now())
+  sentAt      DateTime?
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+}
+
+// ──────────────────────────────── Inbox ───────────────────────────────────
+
+model Contact {
+  id          String   @id @default(cuid())
+  orgId       String
+  kind        String   @default("customer") // customer | vendor | lead
+  name        String
+  company     String?
+  phone       String?
+  email       String?
+  language    String?
+  tags        String?  // comma-separated
+  notes       String?
+  addressJson String?
+  isBlocked   Boolean  @default(false)
+  autoCreated Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  inboundItems  InboundItem[]
+  quotes        Quote[]
+  invoices      Invoice[]
+  tasks         Task[]
+  reminders     Reminder[]
+  documents     Document[]
+
+  @@index([orgId, kind])
+  @@index([orgId, phone])
+  @@index([orgId, email])
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  orgId       String
+  channelId   String?
+  contactId   String?
+  subject     String?
+  channelType String   @default("whatsapp")
+  status      String   @default("open") // open | snoozed | closed
+  priority    String   @default("normal") // low | normal | high | urgent
+  lastMessageAt DateTime @default(now())
+  unread      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org       Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  channel   ChannelAccount? @relation(fields: [channelId], references: [id])
+  contact   Contact?        @relation(fields: [contactId], references: [id])
+  items     InboundItem[]
+
+  @@index([orgId, status])
+  @@index([contactId])
+}
+
+model InboundItem {
+  id            String   @id @default(cuid())
+  orgId         String
+  conversationId String?
+  channelId     String?
+  contactId     String?
+  channelType   String   @default("whatsapp") // whatsapp | email | upload
+  direction     String   @default("inbound")
+  kind          String   @default("text") // text | image | audio | document | email
+  bodyText      String?  // raw text / caption
+  providerEventId String?
+  fromIdentifier String?
+  status        String   @default("received") // received | processing | processed | failed | needs_review
+  intent        String?  // set after AI classification
+  priority      String   @default("normal")
+  confidence    Int?     // 0..100 overall
+  isRead        Boolean  @default(false)
+  assignedToId  String?
+  labelsJson    String?
+  receivedAt    DateTime @default(now())
+  processedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversation  Conversation? @relation(fields: [conversationId], references: [id])
+  channel       ChannelAccount? @relation(fields: [channelId], references: [id])
+  contact       Contact?      @relation(fields: [contactId], references: [id])
+  assignedTo    User?         @relation("AssignedTo", fields: [assignedToId], references: [id])
+  attachments   Attachment[]
+  aiJobs        AiJob[]
+  analysis      AiAnalysis?
+  suggestions   ActionSuggestion[]
+  documents     Document[]
+
+  @@index([orgId, status])
+  @@index([orgId, intent])
+  @@index([conversationId])
+  @@index([assignedToId])
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  orgId        String
+  inboundItemId String?
+  filename     String
+  mimeType     String
+  sizeBytes    Int      @default(0)
+  storageKey   String
+  checksum     String?
+  kind         String   @default("document") // image | audio | document | csv
+  status       String   @default("stored") // stored | scanning | ready | rejected
+  durationSec  Int?     // for audio
+  transcriptText String?
+  createdAt    DateTime @default(now())
+
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inboundItem  InboundItem? @relation(fields: [inboundItemId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([inboundItemId])
+}
+
+model Label {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  color     String   @default("#64748b")
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, name])
+}
+
+// ────────────────────────────────── AI ────────────────────────────────────
+
+model AiJob {
+  id            String   @id @default(cuid())
+  orgId         String
+  inboundItemId String?
+  documentId    String?
+  stage         String   // language | transcription | ocr | classify | extract | match | action | policy
+  status        String   @default("queued") // queued | running | done | failed | retrying
+  provider      String   @default("mock")
+  model         String?
+  attempts      Int      @default(0)
+  idempotencyKey String? @unique
+  inputJson     String?
+  outputJson    String?
+  error         String?
+  latencyMs     Int?
+  queuedAt      DateTime @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inboundItem InboundItem? @relation(fields: [inboundItemId], references: [id], onDelete: Cascade)
+  document    Document?    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, status])
+  @@index([inboundItemId])
+}
+
+model AiAnalysis {
+  id            String   @id @default(cuid())
+  orgId         String
+  inboundItemId String   @unique
+  intent        String
+  secondaryIntent String?
+  language      String?
+  summary       String?
+  confidence    Int      @default(0) // 0..100
+  entitiesJson  String   @default("[]") // ExtractedEntity[] snapshot
+  riskFlagsJson String   @default("[]")
+  sourceEvidenceJson String @default("[]")
+  provider      String   @default("mock")
+  model         String?
+  pipelineVersion String @default("v1")
+  outputHash    String?
+  createdAt     DateTime @default(now())
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inboundItem InboundItem  @relation(fields: [inboundItemId], references: [id], onDelete: Cascade)
+  entities    ExtractedEntity[]
+
+  @@index([orgId, intent])
+}
+
+model ExtractedEntity {
+  id         String   @id @default(cuid())
+  analysisId String
+  type       String   // customer | product | amount | date | quantity | phone | email | address | invoice_no | due_date
+  value      String
+  confidence Int      @default(0)
+  source     String?  // "transcript:line1" style pointer
+  resolved   Boolean  @default(false)
+  resolvedRef String? // linked catalog/contact id
+
+  analysis AiAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+}
+
+model UsageCost {
+  id        String   @id @default(cuid())
+  orgId     String
+  jobId     String?
+  provider  String
+  model     String?
+  operation String   // transcription | ocr | classify | extract | draft
+  units     Int      @default(0) // tokens / pages / seconds
+  costCents Int      @default(0)
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+}
+
+// ──────────────────────────────── Actions ─────────────────────────────────
+
+model ActionSuggestion {
+  id            String   @id @default(cuid())
+  orgId         String
+  inboundItemId String?
+  type          String   // task | quote | invoice | reminder | followup | crm_update | calendar | approval | document
+  title         String
+  summary       String?
+  confidence    Int      @default(0)
+  priority      String   @default("normal")
+  requiresApproval Boolean @default(true)
+  state         String   @default("suggested") // suggested | needs_review | approved | executed | rejected | deferred
+  draftJson     String?  // proposed output (quote lines, message body, task fields...)
+  sourceEvidenceJson String @default("[]")
+  rejectionReason String?
+  feedbackRating String? // wrong | partial | correct
+  resultType    String?  // created entity type after execution
+  resultId      String?  // created entity id
+  assignedToId  String?
+  deferUntil    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inboundItem InboundItem? @relation(fields: [inboundItemId], references: [id])
+  events      ActionEvent[]
+
+  @@index([orgId, state])
+  @@index([orgId, type])
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  orgId       String
+  title       String
+  description String?
+  status      String   @default("open") // open | in_progress | done | cancelled
+  priority    String   @default("normal")
+  dueAt       DateTime?
+  contactId   String?
+  assigneeId  String?
+  createdById String?
+  sourceType  String?  // inbound_item | action | manual
+  sourceId    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  completedAt DateTime?
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact   Contact?     @relation(fields: [contactId], references: [id])
+  assignee  User?        @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy User?        @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  reminders Reminder[]
+
+  @@index([orgId, status])
+  @@index([assigneeId])
+}
+
+model Reminder {
+  id         String   @id @default(cuid())
+  orgId      String
+  title      String
+  remindAt   DateTime
+  kind       String   @default("followup") // payment | renewal | deadline | delivery | appointment | followup
+  status     String   @default("scheduled") // scheduled | sent | done | dismissed
+  contactId  String?
+  taskId     String?
+  relatedType String? // invoice | document | quote
+  relatedId  String?
+  createdAt  DateTime @default(now())
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact Contact?     @relation(fields: [contactId], references: [id])
+  task    Task?        @relation(fields: [taskId], references: [id])
+
+  @@index([orgId, status])
+  @@index([orgId, remindAt])
+}
+
+model Approval {
+  id          String   @id @default(cuid())
+  orgId       String
+  type        String   // invoice | discount | payment_reminder | outbound_message
+  status      String   @default("pending") // pending | approved | rejected
+  subjectType String
+  subjectId   String
+  requestedById String?
+  decidedById String?
+  note        String?
+  createdAt   DateTime @default(now())
+  decidedAt   DateTime?
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  decidedBy User?        @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([orgId, status])
+}
+
+model ActionEvent {
+  id           String   @id @default(cuid())
+  orgId        String
+  suggestionId String?
+  actorId      String?
+  type         String   // created | edited | approved | rejected | executed | deferred | reopened
+  detailJson   String?
+  createdAt    DateTime @default(now())
+
+  org        Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  suggestion ActionSuggestion? @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  actor      User?             @relation(fields: [actorId], references: [id])
+
+  @@index([suggestionId])
+}
+
+// ─────────────────────────────── Commerce ─────────────────────────────────
+
+model CatalogItem {
+  id          String   @id @default(cuid())
+  orgId       String
+  sku         String?
+  name        String
+  description String?
+  unit        String   @default("unit")
+  priceCents  Int      @default(0)
+  taxPercent  Int      @default(0) // stored as basis for %, e.g. 17 => 17%
+  trackStock  Boolean  @default(false)
+  stockQty    Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org     Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  aliases CatalogAlias[]
+
+  @@index([orgId, isActive])
+}
+
+model CatalogAlias {
+  id      String @id @default(cuid())
+  itemId  String
+  alias   String
+  language String?
+
+  item CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+}
+
+model Quote {
+  id          String   @id @default(cuid())
+  orgId       String
+  number      String
+  contactId   String?
+  status      String   @default("draft") // draft | sent | accepted | rejected | expired | converted
+  currency    String   @default("PKR")
+  subtotalCents Int    @default(0)
+  taxCents    Int      @default(0)
+  discountCents Int    @default(0)
+  totalCents  Int      @default(0)
+  notes       String?
+  terms       String?
+  validUntil  DateTime?
+  version     Int      @default(1)
+  sourceItemId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  sentAt      DateTime?
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact Contact?     @relation(fields: [contactId], references: [id])
+  items   QuoteItem[]
+  invoices Invoice[]
+
+  @@unique([orgId, number])
+  @@index([orgId, status])
+}
+
+model QuoteItem {
+  id          String @id @default(cuid())
+  quoteId     String
+  name        String
+  description String?
+  quantity    Int    @default(1)
+  unitPriceCents Int @default(0)
+  taxPercent  Int    @default(0)
+  lineTotalCents Int @default(0)
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  orgId       String
+  number      String
+  contactId   String?
+  quoteId     String?
+  status      String   @default("draft") // draft | sent | paid | partial | overdue | void
+  currency    String   @default("PKR")
+  subtotalCents Int    @default(0)
+  taxCents    Int      @default(0)
+  discountCents Int    @default(0)
+  totalCents  Int      @default(0)
+  paidCents   Int      @default(0)
+  dueAt       DateTime?
+  notes       String?
+  terms       String?
+  version     Int      @default(1)
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org      Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact  Contact?      @relation(fields: [contactId], references: [id])
+  quote    Quote?        @relation(fields: [quoteId], references: [id])
+  items    InvoiceItem[]
+  payments PaymentEvent[]
+
+  @@unique([orgId, number])
+  @@index([orgId, status])
+}
+
+model InvoiceItem {
+  id          String @id @default(cuid())
+  invoiceId   String
+  name        String
+  description String?
+  quantity    Int    @default(1)
+  unitPriceCents Int @default(0)
+  taxPercent  Int    @default(0)
+  lineTotalCents Int @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model PaymentEvent {
+  id         String   @id @default(cuid())
+  orgId      String
+  invoiceId  String
+  amountCents Int     @default(0)
+  method     String   @default("manual") // manual | bank | cash | online
+  reference  String?
+  proofAttachmentId String?
+  status     String   @default("recorded") // recorded | verified | disputed
+  createdAt  DateTime @default(now())
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([invoiceId])
+}
+
+// ─────────────────────────────── Documents ────────────────────────────────
+
+model Document {
+  id            String   @id @default(cuid())
+  orgId         String
+  inboundItemId String?
+  contactId     String?
+  title         String
+  docType       String   @default("other") // invoice | receipt | contract | notice | quote | payment_proof | id | other
+  status        String   @default("processing") // processing | ready | failed
+  storageKey    String?
+  mimeType      String?
+  pageCount     Int      @default(1)
+  ocrText       String?
+  extractedJson String?  // structured fields
+  confidence    Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inboundItem InboundItem? @relation(fields: [inboundItemId], references: [id])
+  contact     Contact?     @relation(fields: [contactId], references: [id])
+  obligations Obligation[]
+  aiJobs      AiJob[]
+
+  @@index([orgId, docType])
+}
+
+model Obligation {
+  id         String   @id @default(cuid())
+  orgId      String
+  documentId String
+  title      String
+  dueAt      DateTime?
+  amountCents Int?
+  riskLevel  String   @default("normal") // low | normal | high
+  status     String   @default("open") // open | done | dismissed
+  createdAt  DateTime @default(now())
+
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  document Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, status])
+}
+
+// ─────────────────────────────── Workflow ─────────────────────────────────
+
+model WorkflowRule {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  trigger     String   // inbound_received | intent_detected | invoice_due | low_confidence | payment_proof
+  conditionsJson String @default("[]")
+  actionsJson String   @default("[]")
+  requiresApproval Boolean @default(false)
+  runCount    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org        Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  executions WorkflowExecution[]
+
+  @@index([orgId, isActive])
+}
+
+model WorkflowExecution {
+  id        String   @id @default(cuid())
+  orgId     String
+  ruleId    String
+  status    String   @default("success") // success | failed | skipped
+  contextJson String?
+  createdAt DateTime @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  rule WorkflowRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  orgId     String
+  type      String   // quote | invoice | followup | reminder | greeting | escalation | appointment | payment_request
+  name      String
+  language  String   @default("en")
+  tone      String   @default("friendly") // formal | friendly | concise | premium | conversational
+  subject   String?
+  body      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, type])
+}
+
+// ─────────────────────────── Analytics / Billing ──────────────────────────
+
+model MetricsRollup {
+  id        String   @id @default(cuid())
+  orgId     String
+  date      String   // YYYY-MM-DD
+  metric    String
+  value     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, date, metric])
+  @@index([orgId, metric])
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  orgId       String   @unique
+  plan        String   @default("team") // solo | team | ops
+  status      String   @default("trialing") // trialing | active | past_due | canceled
+  billingCycle String  @default("monthly")
+  trialEndsAt DateTime?
+  currentPeriodEnd DateTime?
+  seats       Int      @default(5)
+  providerCustomerId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model UsageCounter {
+  id         String   @id @default(cuid())
+  orgId      String
+  metric     String   // ai_actions | ocr_pages | voice_minutes | storage_mb | messages | seats
+  period     String   // YYYY-MM
+  used       Int      @default(0)
+  limit      Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, metric, period])
+}
+
+// ──────────────────────────── Audit / Notify ──────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  orgId     String
+  actorId   String?
+  actorType String   @default("user") // user | ai | system | integration
+  action    String   // e.g. action.approved, invoice.sent, channel.connected
+  targetType String?
+  targetId  String?
+  metaJson  String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actor User?        @relation(fields: [actorId], references: [id])
+
+  @@index([orgId, createdAt])
+  @@index([orgId, action])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  type      String   // assignment | approval | integration_failed | overdue | processing_error | digest
+  title     String
+  body      String?
+  linkUrl   String?
+  severity  String   @default("info") // info | warning | danger | success
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model Note {
+  id          String   @id @default(cuid())
+  orgId       String
+  authorId    String?
+  targetType  String   // contact | task | quote | invoice | conversation | document
+  targetId    String
+  body        String
+  createdAt   DateTime @default(now())
+
+  // targetType/targetId is polymorphic (contact | task | quote | invoice | ...)
+  // so we intentionally do not model a hard FK to the target.
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  author User?        @relation(fields: [authorId], references: [id])
+
+  @@index([orgId, targetType, targetId])
+}

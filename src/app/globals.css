@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Neutrals — warm slate */
+    --background: 240 20% 99%;
+    --foreground: 232 24% 14%;
+    --surface: 0 0% 100%;
+    --surface-muted: 240 24% 97%;
+    --card: 0 0% 100%;
+    --card-foreground: 232 24% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 232 24% 14%;
+    --muted: 240 20% 96%;
+    --muted-foreground: 232 12% 46%;
+    --secondary: 240 22% 95%;
+    --secondary-foreground: 232 24% 20%;
+
+    /* Brand — deep iris/indigo */
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --primary-muted: 243 90% 96%;
+
+    /* Accent — warm amber (AI / confidence highlights) */
+    --accent: 32 95% 52%;
+    --accent-foreground: 28 80% 16%;
+    --accent-muted: 40 96% 94%;
+
+    /* Semantic */
+    --success: 152 62% 40%;
+    --success-foreground: 0 0% 100%;
+    --success-muted: 152 55% 94%;
+    --warning: 35 92% 50%;
+    --warning-foreground: 30 80% 14%;
+    --warning-muted: 40 96% 93%;
+    --danger: 356 72% 53%;
+    --danger-foreground: 0 0% 100%;
+    --danger-muted: 356 80% 96%;
+    --info: 212 84% 52%;
+    --info-foreground: 0 0% 100%;
+    --info-muted: 212 90% 95%;
+
+    --border: 240 18% 90%;
+    --input: 240 18% 88%;
+    --ring: 243 75% 59%;
+
+    --radius: 0.7rem;
+  }
+
+  .dark {
+    --background: 232 27% 8%;
+    --foreground: 240 20% 96%;
+    --surface: 232 24% 11%;
+    --surface-muted: 232 22% 13%;
+    --card: 232 24% 11%;
+    --card-foreground: 240 20% 96%;
+    --popover: 232 24% 12%;
+    --popover-foreground: 240 20% 96%;
+    --muted: 232 18% 17%;
+    --muted-foreground: 240 12% 64%;
+    --secondary: 232 18% 18%;
+    --secondary-foreground: 240 20% 92%;
+
+    --primary: 245 84% 70%;
+    --primary-foreground: 240 40% 10%;
+    --primary-muted: 245 40% 20%;
+
+    --accent: 34 94% 56%;
+    --accent-foreground: 28 90% 12%;
+    --accent-muted: 34 50% 20%;
+
+    --success: 152 55% 46%;
+    --success-foreground: 152 60% 6%;
+    --success-muted: 152 40% 18%;
+    --warning: 37 90% 56%;
+    --warning-foreground: 30 80% 10%;
+    --warning-muted: 37 50% 18%;
+    --danger: 356 72% 60%;
+    --danger-foreground: 0 0% 100%;
+    --danger-muted: 356 40% 22%;
+    --info: 212 84% 62%;
+    --info-foreground: 212 60% 8%;
+    --info-muted: 212 44% 20%;
+
+    --border: 232 16% 22%;
+    --input: 232 16% 24%;
+    --ring: 245 84% 70%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Tabular numerals for money / metrics / tables */
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+  }
+
+  /* Custom scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply outline-none ring-offset-2 ring-offset-background focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .surface-card {
+    @apply rounded-xl border border-border bg-card shadow-sm;
+  }
+
+  /* Subtle grid backdrop used on marketing + auth screens */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-br from-primary via-primary to-accent bg-clip-text text-transparent;
+  }
+}
+
+/* Skeleton shimmer */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: hsl(var(--muted));
+}
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--surface) / 0.6),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+  content: "";
+}
