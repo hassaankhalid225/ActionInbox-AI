@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
@@ -39,17 +40,25 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, loading, children, disabled, ...props }, ref) => {
+  ({ className, variant, size, loading, children, disabled, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button";
     return (
-      <button
+      <Comp
         ref={ref}
         className={cn(buttonVariants({ variant, size }), className)}
-        disabled={disabled || loading}
+        // Slot forwards to its child (e.g. <Link>), which has no `disabled`.
+        {...(asChild ? {} : { disabled: disabled || loading })}
         {...props}
       >
-        {loading && <Loader2 className="animate-spin" />}
-        {children}
-      </button>
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {loading && <Loader2 className="animate-spin" />}
+            {children}
+          </>
+        )}
+      </Comp>
     );
   },
 );
